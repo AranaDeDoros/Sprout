@@ -1,0 +1,11 @@
+name: User
+modelDef:
+  - name: id
+    valueType: Long
+  - name: name
+    valueType: String
+endpoints:
+  - path: users
+    method: post
+    request: User
+    response: User
