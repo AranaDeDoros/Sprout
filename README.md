@@ -45,7 +45,7 @@ endpoints:
 ```
 
 ```bash
-sprout new:model name [--with-router, -wr] # adds router and api rest endpoints
+sprout new:model name [--with-router, -wr] # adds a simple router
 ```
 
 This will produce a file under sprout/models and a router if --with-router/-wr was passed.
@@ -53,23 +53,23 @@ This will produce a file under sprout/models and a router if --with-router/-wr w
 ```bash
 sprout new:router name [[--api, -a [--model, -m]] # --api/-a adds api restful endpoints
 # this must then receive a -m --model flag to choose an existing model based on the Router name
-# i.g. new:router User --api --model -> implies a search for an User model 
+# i.g. new:router User --api --model -> implies a search for an User model under sprout/models
 ```
 This will produce a file under sprout/routers.
 
 ### Forage
 
-This command is ideally after you have generated files under /sprout. 
+This command is to be used after you have generated files under /sprout. 
 Forage walks through your schemas folder and produces the definitions declared
 and at last, bootstraps all routes into a Server.scala wiring routes and endpoints.
 
  ```bash
-sprout forage [-o, --overwite] # by default, we never overwrite, 
-# if passed, the file contents will be overwritten
-#
+sprout forage 
 ```
 ### Limitations / Warnings
 
-- Code is produced from Strings, so type safety isn't guaranteed.
-- Ox isn't included by default yet.
-- It's a WIP so a lot of things have to change.
+- **Sprout by default overwrites. I'd advise you keep sprout files and your actual models with implementations and endpoint logic separate. Not only to avoid
+  overwrites but as a way to separate the actual wiring from logic.**
+- Code is produced from Strings, so type safety isn't guaranteed. Will look in the future a way to handle this if it gets big enough. For now, we are trading soundness for simplicity.
+- Ox isn't included by default yet. Will probably do it next.
+- It's a WIP so a lot of things are bound to change.
