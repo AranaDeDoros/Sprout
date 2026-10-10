@@ -1,3 +1,6 @@
+<img height="500" alt="logo" src="https://github.com/user-attachments/assets/5c3d03cb-dc49-49ef-97e9-115cd6321274" />
+
+
 ## Sprout
 
 Sprout is an opinionated boilerplate generator tool to work with the VirtusLab Scala Stack. 
