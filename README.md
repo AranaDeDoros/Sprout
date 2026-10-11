@@ -74,5 +74,4 @@ sprout forage
 - **Sprout by default overwrites. I'd advise you keep sprout files and your actual models with implementations and endpoint logic separate. Not only to avoid
   overwrites but as a way to separate the actual wiring from logic.**
 - Code is produced from Strings, so type safety isn't guaranteed. Will look in the future a way to handle this if it gets big enough. For now, we are trading soundness for simplicity.
-- Ox isn't included by default yet. Will probably do it next.
 - It's a WIP so a lot of things are bound to change.
