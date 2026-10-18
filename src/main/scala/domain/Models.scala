@@ -57,13 +57,16 @@ enum Entity extends Generatable:
       processSpec(specArgs)
 
   private def processSpec(specArgs: SchemaArgs): GenerationResult =
-    val spc = new SchemaParser(specArgs).loadSpec()
-    val sfw = new SourceFileWriter(spc)
-    sfw.generateAndWrite() match
-      case Right(()) =>
-        GenerationResult.success(s"Successfully generated and wrote files for : ${specArgs.filename}")
-      case Left(error) =>
-        GenerationResult.failure(s"Failed to process ${specArgs.filename}: ${error.getMessage}")
+    new SchemaParser(specArgs).loadSpec() match
+      case Left(schemaError) =>
+        GenerationResult.failure(s"Failed to parse ${specArgs.filename}: ${schemaError.message}")
+      case Right(spc) =>
+        val sfw = new SourceFileWriter(spc)
+        sfw.generateAndWrite() match
+          case Right(()) =>
+            GenerationResult.success(s"Successfully generated and wrote files for : ${specArgs.filename}")
+          case Left(error) =>
+            GenerationResult.failure(s"Failed to process ${specArgs.filename}: ${error.getMessage}")
 
 /** Subcommand trait for root operations: New (create) or Forage (bootstrap)
   */

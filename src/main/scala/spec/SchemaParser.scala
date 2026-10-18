@@ -3,6 +3,7 @@ package spec
 import cliparsing.Parser.{ValidModelFlags, ValidRouterApiFlags}
 import domain.Entity
 import org.yaml.snakeyaml.Yaml
+import spec.YamlOps.*
 
 import java.io.{FileInputStream, InputStream}
 import java.util
@@ -17,69 +18,88 @@ class SchemaParser(private val args: SchemaArgs):
 
   private val yaml = Yaml()
 
-  private def parseModel(data: util.Map[String, Object]): List[FieldSpec] =
-    data.get("modelDef")
-      .asInstanceOf[util.List[util.Map[String, Object]]]
-      .toArray
-      .toList
-      .map {
-        raw =>
-          val field = raw.asInstanceOf[util.Map[String, Object]]
-          FieldSpec(
-            name = field.get("name").toString,
-            valueType = field.get("valueType").toString
-          )
+  private def parseField(raw: util.Map[String, Object]): Either[SchemaError, FieldSpec] =
+    for
+      n <- raw.str("name").flatMap(FieldName.from)
+      t <- raw.str("valueType").flatMap(TypeName.from)
+    yield FieldSpec(n, t)
+
+  private def parseEndpoint(raw: util.Map[String, Object]): Either[SchemaError, EndpointSpec] =
+    for
+      path <- raw.str("path").flatMap(EndpointPath.from)
+      m    <- raw.str("method").flatMap(HttpMethod.parse)
+      req  <- raw.optStr("request").flatMap {
+                case None    => Right(None)
+                case Some(s) => TypeName.from(s).map(Some(_))
+              }
+      res  <- raw.optStr("response").flatMap {
+                case None    => Right(None)
+                case Some(s) => TypeName.from(s).map(Some(_))
+              }
+    yield EndpointSpec(path, m, req, res)
+
+  private def parseModel(data: util.Map[String, Object]): Either[SchemaError, List[FieldSpec]] =
+    data.objList("modelDef").flatMap { rows =>
+      rows.foldLeft[Either[SchemaError, List[FieldSpec]]](Right(Nil)) { (acc, row) =>
+        for
+          fields <- acc
+          field  <- parseField(row)
+        yield fields :+ field
       }
+    }
 
-  private def parseEndpoints(data: util.Map[String, Object]): Option[List[EndpointSpec]] =
-    Option(data.get("endpoints"))
-      .map(_.asInstanceOf[util.List[util.Map[String, Object]]])
-      .map(_.toArray.toList)
-      .map(_.map {
-        raw =>
-          val endpoint = raw.asInstanceOf[util.Map[String, Object]]
-          EndpointSpec(
-            path = endpoint.get("path").toString,
-            method = endpoint.get("method").toString,
-            request = Option(endpoint.get("request")).map(_.toString),
-            response = endpoint.get("response").toString
-          )
-      })
+  private def parseEndpoints(data: util.Map[String, Object]): Either[SchemaError, Option[List[EndpointSpec]]] =
+    data.optObjList("endpoints").flatMap {
+      case Nil  => Right(None)
+      case rows =>
+        rows.foldLeft[Either[SchemaError, List[EndpointSpec]]](Right(Nil)) { (acc, row) =>
+          for
+            eps <- acc
+            ep  <- parseEndpoint(row)
+          yield eps :+ ep
+        }.map(Some(_))
+    }
 
-  /** we choose which entity we're processing
-    */
-  private def createSpec(data: util.Map[String, Object]): SchemaSpec =
+  /** We choose which entity we're processing */
+  private def createSpec(data: util.Map[String, Object]): Either[SchemaError, SchemaSpec] =
     val name = data.get("name").toString
     this.args.entity match
       case Entity.Model =>
-        val modelDef = parseModel(data)
-        val endpoints = Option.when(args.flags.containsAny(ValidModelFlags.toList*)) {
-          parseEndpoints(data)
-        }.flatten
-        ModelSpec(name, modelDef, endpoints)
-      case Entity.Router =>
-        val endpointsFromYaml = parseEndpoints(data).getOrElse(Nil)
-        val hasApiFlag        = args.flags.containsAny(ValidRouterApiFlags.toList*)
-        val endpoints =
-          if hasApiFlag then
-            List(
-              EndpointSpec(name.toLowerCase, "get", None, name),
-              EndpointSpec(name.toLowerCase, "post", Some(name), name),
-              EndpointSpec(name.toLowerCase, "put", Some(name), name),
-              EndpointSpec(name.toLowerCase, "delete", None, name)
-            )
-          else endpointsFromYaml
-        val hasModelGenFlag = args.flags.containsAny("--model")
-        val modelSpec = Option.when(hasModelGenFlag) {
-          ModelSpec(name, parseModel(data), None)
-        }
-        RouterSpec(name, endpoints, modelSpec)
+        for
+          modelDef  <- parseModel(data)
+          endpoints <- Option
+                         .when(args.flags.containsAny(ValidModelFlags.toList*))(parseEndpoints(data))
+                         .getOrElse(Right(None))
+        yield ModelSpec(name, modelDef, endpoints)
 
-  def loadSpec(): SchemaSpec =
+      case Entity.Router =>
+        val hasApiFlag = args.flags.containsAny(ValidRouterApiFlags.toList*)
+        for
+          endpointsFromYaml <- parseEndpoints(data)
+          endpoints =
+            if hasApiFlag then
+              // Construct the four standard CRUD endpoints using the validated ADT constructors.
+              // These are known-good values so we call .getOrElse(???), but use Right-biased
+              // validation to keep it safe.
+              val nameLower = name.toLowerCase
+              List(
+                EndpointSpec(EndpointPath.from(nameLower).getOrElse(???), HttpMethod.Get,    None,               TypeName.from(name).toOption),
+                EndpointSpec(EndpointPath.from(nameLower).getOrElse(???), HttpMethod.Post,   TypeName.from(name).toOption, TypeName.from(name).toOption),
+                EndpointSpec(EndpointPath.from(nameLower).getOrElse(???), HttpMethod.Put,    TypeName.from(name).toOption, TypeName.from(name).toOption),
+                EndpointSpec(EndpointPath.from(nameLower).getOrElse(???), HttpMethod.Delete, None,               TypeName.from(name).toOption)
+              )
+            else endpointsFromYaml.getOrElse(Nil)
+          hasModelGenFlag = args.flags.containsAny("--model")
+          modelSpec <-
+            if hasModelGenFlag then parseModel(data).map(fields => Some(ModelSpec(name, fields, None)))
+            else Right(None)
+        yield RouterSpec(name, endpoints, modelSpec)
+
+  def loadSpec(): Either[SchemaError, SchemaSpec] =
     Using.resource(
       new FileInputStream(s"src/main/resources/schemas/${this.args.filename}.yaml")
     )(loadFile)
 
-  private def loadFile(input: InputStream): SchemaSpec =
+  private def loadFile(input: java.io.InputStream): Either[SchemaError, SchemaSpec] =
     val data = yaml.load[util.Map[String, Object]](input)
     createSpec(data)

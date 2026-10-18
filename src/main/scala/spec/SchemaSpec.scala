@@ -13,7 +13,11 @@ case class SchemaArgs(
 
 sealed trait SchemaSpec(name: String)
 
-case class FieldSpec(name: String, valueType: String)
+/** A single field in a model definition.
+  * @param name      validated camelCase identifier (e.g. "userId")
+  * @param valueType validated Scala type name (e.g. "Long", "List[String]")
+  */
+case class FieldSpec(name: FieldName, valueType: TypeName)
 
 case class ModelSpec(
   name: String,
@@ -21,11 +25,17 @@ case class ModelSpec(
   endpoints: Option[List[EndpointSpec]]
 ) extends SchemaSpec(name)
 
+/** A single REST endpoint.
+  * @param path     validated non-empty URL path segment
+  * @param method   typed HTTP verb
+  * @param request  optional request body type
+  * @param response optional response body type (None = no body)
+  */
 case class EndpointSpec(
-  path: String,
-  method: String,
-  request: Option[String],
-  response: String
+  path: EndpointPath,
+  method: HttpMethod,
+  request: Option[TypeName],
+  response: Option[TypeName]
 )
 
 case class RouterSpec(

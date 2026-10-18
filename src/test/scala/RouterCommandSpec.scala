@@ -35,34 +35,41 @@ class RouterCommandSpec extends FunSuite:
 
   test("SchemaParser parses endpoints from yaml when run with no flags"):
     val args = SchemaArgs(Entity.Router, "User", Nil)
-    val spec = SchemaParser(args).loadSpec().asInstanceOf[RouterSpec]
+    val spec = SchemaParser(args).loadSpec()
+
+    assert(spec.isRight, s"Expected Right but got: $spec")
+    val routerSpec = spec.getOrElse(sys.error("unreachable")).asInstanceOf[RouterSpec]
 
     // From User.yaml: path: users, method: post, request: User, response: User
-    assertEquals(spec.endpoints.length, 1)
-    assertEquals(spec.endpoints.head.path, "users")
-    assertEquals(spec.endpoints.head.method, "post")
-    assertEquals(spec.endpoints.head.request, Some("User"))
-    assertEquals(spec.endpoints.head.response, "User")
-    assertEquals(spec.model, None)
+    assertEquals(routerSpec.endpoints.length, 1)
+    assertEquals(routerSpec.endpoints.head.path.value, "users")
+    assertEquals(routerSpec.endpoints.head.method, HttpMethod.Post)
+    assertEquals(routerSpec.endpoints.head.request.map(_.value), Some("User"))
+    assertEquals(routerSpec.endpoints.head.response.map(_.value), Some("User"))
+    assertEquals(routerSpec.model, None)
 
   test("SchemaParser generates classic http verb endpoints when --api or -a is passed"):
     val argsApi = SchemaArgs(Entity.Router, "User", List(Flag("--api"), Flag("-m")))
-    val specApi = SchemaParser(argsApi).loadSpec().asInstanceOf[RouterSpec]
+    val specApi = SchemaParser(argsApi).loadSpec()
 
-    val methods = specApi.endpoints.map(_.method)
-    assertEquals(methods, List("get", "post", "put", "delete"))
-    assertEquals(specApi.model, None)
+    assert(specApi.isRight, s"Expected Right but got: $specApi")
+    val routerSpec = specApi.getOrElse(sys.error("unreachable")).asInstanceOf[RouterSpec]
+
+    val methods = routerSpec.endpoints.map(_.method)
+    assertEquals(methods, List(HttpMethod.Get, HttpMethod.Post, HttpMethod.Put, HttpMethod.Delete))
+    assertEquals(routerSpec.model, None)
 
   test("SchemaParser generates model only when --model is passed"):
     val argsModel = SchemaArgs(Entity.Router, "User", List(Flag("--model")))
-    val specModel = SchemaParser(argsModel).loadSpec().asInstanceOf[RouterSpec]
-    assert(specModel.model.isDefined)
+    val specModel = SchemaParser(argsModel).loadSpec()
+    assert(specModel.isRight)
+    assert(specModel.getOrElse(sys.error("unreachable")).asInstanceOf[RouterSpec].model.isDefined)
 
     val argsShortM = SchemaArgs(Entity.Router, "User", List(Flag("-m")))
-    val specShortM = SchemaParser(argsShortM).loadSpec().asInstanceOf[RouterSpec]
-    assertEquals(specShortM.model, None)
+    val specShortM = SchemaParser(argsShortM).loadSpec()
+    assert(specShortM.isRight)
+    assertEquals(specShortM.getOrElse(sys.error("unreachable")).asInstanceOf[RouterSpec].model, None)
 
   test("new:router -m fails when existing model is not found"):
     val res = Entity.Router.generate(List(CLIOption("NonExistent")), List(Flag("-m")))
     assert(res.isLeft)
-

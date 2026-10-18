@@ -20,6 +20,10 @@ case class GeneratorConfig(
     schemasDir: Path = SPROUT_SCHEMA_PATH,
     outputRootDir: Path = Paths.get("src/main/scala")
 ):
+  /** Maps a [[Layer]] to a concrete directory path, e.g. Layer.Models → "src/main/scala/sprout/models" */
+  def layerToPath(layer: Layer): Path =
+    packageToPath(layer.dir)
+
   /** Maps a sub-package (e.g. "models") to a path like "src/main/scala/com/example/models" */
   def packageToPath(subPackage: String): Path =
     val fullPackage =
@@ -92,41 +96,41 @@ class SourceFileWriter(
       _     <- writeToDisk(files)
     yield ()
 
-  private def writeToDisk(files: Vector[(String, String)]): Either[Throwable, Unit] =
+  private def writeToDisk(files: Vector[GeneratedFile]): Either[Throwable, Unit] =
     boundary:
-      for (subPackage, content) <- files do
-        writeOne(subPackage, content) match
+      for file <- files do
+        writeOne(file) match
           case Left(err) => break(Left(err))
           case Right(_)  => ()
       Right(())
 
-  private def writeOne(subPackage: String, content: String): Either[Throwable, Unit] =
+  private def writeOne(file: GeneratedFile): Either[Throwable, Unit] =
     Try {
-      val targetDir = config.packageToPath(subPackage)
+      val targetDir = config.layerToPath(file.layer)
       if !Files.exists(targetDir) then Files.createDirectories(targetDir)
 
-      val fileName = if subPackage == "models" then s"$specName.scala" else s"${specName}Router.scala"
+      val fileName = file.layer.fileName(specName)
       Files.writeString(
         targetDir.resolve(fileName),
-        content,
+        file.content,
         StandardOpenOption.CREATE,
         StandardOpenOption.TRUNCATE_EXISTING
       )
     }.toEither.map(_ => ())
 
-  private[writers] def generate(): Vector[(String, String)] =
+  private[writers] def generate(): Vector[GeneratedFile] =
     spec match
       case ModelSpec(name, modelDef, endpoints) =>
-        val fields = modelDef.map(field => field.name -> field.valueType)
-        val model = "models" -> generateModel(name, fields)
-        val router = "routes" -> generateRouter(name, endpoints.getOrElse(Nil))
+        val fields = modelDef.map(field => field.name.value -> field.valueType.value)
+        val model  = GeneratedFile(Layer.Models, generateModel(name, fields))
+        val router = GeneratedFile(Layer.Routes, generateRouter(name, endpoints.getOrElse(Nil)))
         Vector(model) ++ endpoints.map(_ => router)
 
       case RouterSpec(name, endpoints, model) =>
-        val router = "routes" -> generateRouter(name, endpoints)
+        val router = GeneratedFile(Layer.Routes, generateRouter(name, endpoints))
         val generatedModel = model.map { modelSpec =>
-          val fields = modelSpec.modelDef.map(field => field.name -> field.valueType)
-          "models" -> generateModel(modelSpec.name, fields)
+          val fields = modelSpec.modelDef.map(field => field.name.value -> field.valueType.value)
+          GeneratedFile(Layer.Models, generateModel(modelSpec.name, fields))
         }
         Vector(router) ++ generatedModel
 
@@ -154,18 +158,20 @@ class SourceFileWriter(
     val body =
       if endpoints.nonEmpty then
         val endpointsCode = endpoints.map { ep =>
-          val methodName = ep.method.toLowerCase
-          val valName    = s"$methodName${ep.response}"
+          val methodName = ep.method.tapirName
+          // response drives the val name; fall back to entity name if no response type
+          val responseTypeName = ep.response.map(_.value).getOrElse(entityName)
+          val valName    = s"$methodName$responseTypeName"
           val reqPart = ep.request match
-            case Some(req) if req.nonEmpty => s"\n    .in(jsonBody[$req])"
-            case _                         => ""
-          val resPart =
-            if ep.response.nonEmpty then s"\n    .out(jsonBody[${ep.response}])"
-            else ""
+            case Some(req) => s"\n    .in(jsonBody[${req.value}])"
+            case None      => ""
+          val resPart = ep.response match
+            case Some(res) => s"\n    .out(jsonBody[${res.value}])"
+            case None      => ""
 
           s"""  val $valName = endpoint
              |    .$methodName
-             |    .in("${ep.path}")$reqPart$resPart""".stripMargin
+             |    .in("${ep.path.value}")$reqPart$resPart""".stripMargin
         }.mkString("\n\n")
 
         s"""|
@@ -200,52 +206,51 @@ def wire(config: GeneratorConfig = GeneratorConfig.autoDetect()): Either[Throwab
           .toList
       }
 
-  // check that some sprout files already exist
-  if findFiles(SPROUT_MODELS_PATH).isEmpty ||
-     findFiles(SPROUT_ROUTERS_PATH).isEmpty then
-      return Left(Exception("No sprout files found. /src/main/scala/sprout package exists?"))
+  // Check that some sprout files already exist before generating Server.scala
+  if findFiles(SPROUT_MODELS_PATH).isEmpty || findFiles(SPROUT_ROUTERS_PATH).isEmpty then
+    Left(Exception("No sprout files found. Does the sprout package exist?"))
+  else
+    val code =
+      s"""package ${config.basePackage}
+         |
+         |import sttp.tapir.*
+         |import sttp.tapir.server.netty.NettyFutureServer
+         |import scala.concurrent.ExecutionContext.Implicits.global
+         |import scala.concurrent.{Await, Future}
+         |import scala.concurrent.duration.*
+         |
+         |import ${config.basePackage}.models.*
+         |import ${config.basePackage}.routes.*
+         |
+         |object Main:
+         |
+         |  val allEndpoints = List[Endpoint[Unit, Unit, Unit, Unit, Any]].empty
+         |
+         |  def main(args: Array[String]): Unit =
+         |    val program = for
+         |      binding <- NettyFutureServer()
+         |        .host("0.0.0.0")
+         |        .port(8080)
+         |        .addEndpoints(allEndpoints)
+         |        .start()
+         |      _ = println(s"Server started at http://$${binding.hostName}:$${binding.port}/")
+         |    yield ()
+         |
+         |    Await.result(program, Duration.Inf)
+         |""".stripMargin
 
-  val code =
-    s"""package ${config.basePackage}
-       |
-       |import sttp.tapir.*
-       |import sttp.tapir.server.netty.NettyFutureServer
-       |import scala.concurrent.ExecutionContext.Implicits.global
-       |import scala.concurrent.{Await, Future}
-       |import scala.concurrent.duration.*
-       |
-       |import ${config.basePackage}.models.*
-       |import ${config.basePackage}.routes.*
-       |
-       |object Main:
-       |
-       |  val allEndpoints = List[Endpoint[Unit, Unit, Unit, Unit, Any]].empty
-       |
-       |  def main(args: Array[Array[String]] | Array[String]): Unit =
-       |    val program = for
-       |      binding <- NettyFutureServer()
-       |        .host("0.0.0.0")
-       |        .port(8080)
-       |        .addEndpoints(allEndpoints)
-       |        .start()
-       |      _ = println(s"Server started at http://$${binding.hostName}:$${binding.port}/")
-       |    yield ()
-       |
-       |    Await.result(program, Duration.Inf)
-       |""".stripMargin
-
-  val formattedCode = SourceFileWriter.formatScalaCode(code)
-  Try {
-    val targetDir = SPROUT_PACKAGE_PATH
-    if !Files.exists(targetDir) then Files.createDirectories(targetDir)
-    val fileName = "Server.scala"
-    Files.writeString(
-      targetDir.resolve(fileName),
-      formattedCode,
-      StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING
-    )
-  }.toEither.map(_ => ())
+    val formattedCode = SourceFileWriter.formatScalaCode(code)
+    Try {
+      val targetDir = SPROUT_PACKAGE_PATH
+      if !Files.exists(targetDir) then Files.createDirectories(targetDir)
+      val fileName = "Server.scala"
+      Files.writeString(
+        targetDir.resolve(fileName),
+        formattedCode,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING
+      )
+    }.toEither.map(_ => ())
 
 object SourceFileWriter:
   private val scalafmt = Scalafmt.create(getClass.getClassLoader)
